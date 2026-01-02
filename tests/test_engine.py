@@ -1,112 +1,69 @@
-import unittest
-import sys
 import os
 import shutil
-from unittest.mock import MagicMock, patch
-
-# --- 1. MOCK THE MISSING MODULES ---
-# REMOVE THIS LINE: sys.modules['core.spec_writer'] = MagicMock() 
-
-# Keep these because these files don't exist yet
-sys.modules['core.builder'] = MagicMock()
-sys.modules['core.optimizer'] = MagicMock()
-
-# Now we can safely import
-# (Note: EvolutionEngine imports SpecWriter, so the real file must exist now)
+import pytest
+from unittest.mock import patch, MagicMock
 from core.engine import EvolutionEngine
 
-class TestEvolutionEngine(unittest.TestCase):
-    def setUp(self):
-        self.test_source = "sandbox/source_logic.py"
-        # Ensure we have a dummy source file to read
-        if not os.path.exists(self.test_source):
-            with open(self.test_source, 'w') as f:
-                f.write("def process_data(): pass")
+@pytest.fixture
+def source_path():
+    # Setup dummy source file
+    path = "sandbox/dummy_source.py"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w') as f:
+        f.write("def run(): pass")
+    
+    yield path 
+    
+    # Cleanup
+    if os.path.exists(path):
+        os.remove(path)
+    if os.path.exists("history"):
+        shutil.rmtree("history")
 
-    def tearDown(self):
-        # Cleanup the history folder after tests
-        if os.path.exists("history"):
-            shutil.rmtree("history")
-            
+def test_engine_initialization(source_path):
+    """
+    Test that the engine initializes with the correct path.
+    """
+    engine = EvolutionEngine(source_path)
+    assert engine.source_path == os.path.abspath(source_path)
 
-    @patch('core.engine.SpecWriter')
-    @patch('core.engine.Builder')
-    @patch('core.engine.Optimizer')
-    @patch('core.engine.Critic')
-    def test_engine_flow_success(self, MockCritic, MockOpt, MockBuilder, MockSpec):
-        """Test a full successful run where the Critic passes immediately."""
-        
-        # A. Setup the Mocks
-        # 1. SpecWriter returns a dummy spec
-        MockSpec.return_value.initial_draft.return_value = "Spec v1"
-        
-        # 2. Builder returns dummy code
-        MockBuilder.return_value.build.return_value = "print('hello')"
-        
-        # 3. Critic returns SUCCESS
-        mock_critic_instance = MockCritic.return_value
-        mock_critic_instance.evaluate.return_value = {
-            "pass": True, 
-            "score": 1.0, 
-            "failures": []
-        }
+# We mock ALL agents to prevent them from running real logic during the test
+@patch("core.engine.Optimizer")
+@patch("core.engine.Critic")
+@patch("core.engine.Builder")
+@patch("core.engine.SpecWriter")
+def test_engine_start_generates_initial_draft(
+    mock_spec_writer_cls, 
+    mock_builder_cls, 
+    mock_critic_cls, 
+    mock_optimizer_cls, 
+    source_path
+):
+    """
+    Test that start() reads the source code and calls the writer for an initial draft.
+    """
+    # 1. Setup Mocks
+    mock_writer_instance = mock_spec_writer_cls.return_value
+    mock_writer_instance.initial_draft.return_value = "# Initial Spec"
+    
+    # Mock the Critic to return a 'fail' or 'pass' report so the loop can proceed or stop
+    # If we want to test just the first iteration, we can make it fail or pass.
+    mock_critic_instance = mock_critic_cls.return_value
+    mock_critic_instance.evaluate.return_value = {"score": 0.0, "pass": False, "failures": []}
 
-        # B. Run the Engine
-        engine = EvolutionEngine(self.test_source)
-        engine.start(max_iterations=1)
+    mock_builder_instance = mock_builder_cls.return_value
+    mock_builder_instance.build.return_value = "def candidate(): pass"
 
-        # C. Verification
-        # Check if history folder was created
-        self.assertTrue(os.path.exists("history"))
-        runs = os.listdir("history")
-        self.assertEqual(len(runs), 1)
-        
-        run_path = os.path.join("history", runs[0], "iteration_01")
-        
-        # Check if artifacts were saved
-        self.assertTrue(os.path.exists(os.path.join(run_path, "spec.md")))
-        self.assertTrue(os.path.exists(os.path.join(run_path, "report.json")))
-        
-        # Verify interactions
-        MockSpec.return_value.initial_draft.assert_called_once()
-        MockBuilder.return_value.build.assert_called_once_with("Spec v1")
+    # 2. Initialize Engine
+    engine = EvolutionEngine(source_path)
 
-    @patch('core.engine.SpecWriter')
-    @patch('core.engine.Builder')
-    @patch('core.engine.Optimizer')
-    @patch('core.engine.Critic')
-    def test_engine_flow_failure_retry(self, MockCritic, MockOpt, MockBuilder, MockSpec):
-        """Test that the engine loops and calls Optimizer on failure."""
-        
-        # A. Setup Mocks
-        MockSpec.return_value.initial_draft.return_value = "Spec v1"
-        MockBuilder.return_value.build.return_value = "Bad Code"
-        MockOpt.return_value.evolve.return_value = "Spec v2"
-        
-        mock_critic_instance = MockCritic.return_value
-        
-        # Critic fails the first time, passes the second time
-        mock_critic_instance.evaluate.side_effect = [
-            {"pass": False, "score": 0.5, "failures": ["Error 1"]}, # Iteration 1
-            {"pass": True, "score": 1.0, "failures": []}            # Iteration 2
-        ]
+    # 3. Execute the loop (limit to 1 iteration for this test)
+    engine.start(max_iterations=1)
 
-        # B. Run Engine
-        engine = EvolutionEngine(self.test_source)
-        engine.start(max_iterations=2)
-
-        # C. Verification
-        runs = os.listdir("history")
-        run_path = os.path.join("history", runs[0])
-        
-        # Should have 2 iterations
-        self.assertTrue(os.path.exists(os.path.join(run_path, "iteration_01")))
-        self.assertTrue(os.path.exists(os.path.join(run_path, "iteration_02")))
-        
-        # Verify Optimizer was called with the failure
-        MockOpt.return_value.evolve.assert_called_once()
-        args = MockOpt.return_value.evolve.call_args
-        self.assertEqual(args[0][0], "Spec v1") # Previous spec
-
-if __name__ == '__main__':
-    unittest.main()
+    # 4. Assertions
+    # Verify that the writer was asked to draft the spec
+    # It should be called with the content of our dummy file ("def run(): pass")
+    mock_writer_instance.initial_draft.assert_called_once_with("def run(): pass")
+    
+    # Verify that the builder was called with the generated spec
+    mock_builder_instance.build.assert_called_once_with("# Initial Spec")

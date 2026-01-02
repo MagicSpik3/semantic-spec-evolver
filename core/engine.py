@@ -1,80 +1,101 @@
 import os
+import time
 import json
+import shutil
 from datetime import datetime
-from utils.llm_client import LLMClient
-from core.critic import Critic
 
-# Placeholder imports (we will implement these next)
+# Import the Real Agents
 from core.spec_writer import SpecWriter
 from core.builder import Builder
+from core.critic import Critic
 from core.optimizer import Optimizer
+from utils.llm_client import LLMClient
 
 class EvolutionEngine:
-    def __init__(self, source_path):
-        self.source_path = source_path
-        self.llm = LLMClient() 
-        self.critic = Critic(source_path)
+    def __init__(self, source_path: str):
+        self.source_path = os.path.abspath(source_path)
+        self.llm_client = LLMClient(temperature=0.0) # Zero temp for repeatability
         
         # Initialize Agents
-        self.spec_writer = SpecWriter(self.llm)
-        self.builder = Builder(self.llm)
-        self.optimizer = Optimizer(self.llm)
+        self.writer = SpecWriter(self.llm_client)
+        self.builder = Builder(self.llm_client)
+        self.critic = Critic(self.source_path)
+        self.optimizer = Optimizer(self.llm_client)
+
+        # Setup History
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.run_dir = os.path.join("history", f"run_{timestamp}")
+        os.makedirs(self.run_dir, exist_ok=True)
 
     def start(self, max_iterations=5):
-        # 1. Setup History Directory
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = os.path.join("history", f"run_{timestamp}")
-        os.makedirs(run_dir, exist_ok=True)
-        print(f"🚀 Starting Evolution Run: {run_dir}")
-
-        # 2. Load Ground Truth Code
+        print(f"🚀 Starting Evolution Loop for: {os.path.basename(self.source_path)}")
+        
+        # 1. Read Source Code
         with open(self.source_path, 'r') as f:
             source_code = f.read()
 
-        current_spec = ""
-        last_failure_digest = None
-
-        # 3. The Evolution Loop
+        current_spec = None
+        
         for i in range(1, max_iterations + 1):
-            iter_dir = os.path.join(run_dir, f"iteration_{i:02d}")
+            iter_dir = os.path.join(self.run_dir, f"iteration_{i:02d}")
             os.makedirs(iter_dir, exist_ok=True)
-            print(f"\n--- Cycle {i} ---")
-
-            # --- Step A: Write/Evolve Spec ---
-            if i == 1:
-                print("📝 Drafting Initial Spec...")
-                current_spec = self.spec_writer.initial_draft(source_code)
-            else:
-                print("🧬 Evolving Spec...")
-                current_spec = self.optimizer.evolve(current_spec, last_failure_digest)
             
-            self._save_artifact(iter_dir, "spec.md", current_spec)
+            print(f"\n--- Iteration {i}/{max_iterations} ---")
+            
+            # ------------------------------------------------------------------
+            # STEP 1: GENERATE / EVOLVE SPEC
+            # ------------------------------------------------------------------
+            if i == 1:
+                print("📝 SpecWriter: Drafting initial v1...")
+                current_spec = self.writer.initial_draft(source_code)
+            else:
+                # Load previous failure report
+                prev_report_path = os.path.join(self.run_dir, f"iteration_{i-1:02d}", "report.json")
+                with open(prev_report_path, 'r') as f: prev_report = json.load(f)
+                
+                print("🔧 Optimizer: Refining spec based on failures...")
+                current_spec = self.optimizer.evolve(current_spec, prev_report)
 
-            # --- Step B: Build Code ---
-            print("🔨 Building Candidate Code...")
+            # Save Spec
+            spec_path = os.path.join(iter_dir, "spec.md")
+            with open(spec_path, 'w') as f: f.write(current_spec)
+
+            # ------------------------------------------------------------------
+            # STEP 2: BUILD CANDIDATE
+            # ------------------------------------------------------------------
+            print("👷 Builder: Implementing code from spec...")
             candidate_code = self.builder.build(current_spec)
             
-            # Save code so the Critic can load it
-            code_path = os.path.join(iter_dir, "candidate.py")
-            with open(code_path, 'w') as f:
-                f.write(candidate_code)
+            # Save Candidate
+            candidate_path = os.path.join(iter_dir, "candidate.py")
+            with open(candidate_path, 'w') as f: f.write(candidate_code)
 
-            # --- Step C: Criticize ---
-            print("🕵️  Running Critic...")
-            report = self.critic.evaluate(code_path)
-            self._save_artifact(iter_dir, "report.json", json.dumps(report, indent=2))
-
-            if report["pass"]:
-                print(f"✅ SUCCESS! Logic matched in iteration {i}.")
-                break
+            # ------------------------------------------------------------------
+            # STEP 3: CRITIQUE (THE COST FUNCTION)
+            # ------------------------------------------------------------------
+            print("⚖️  Critic: Running behavioral comparison...")
+            report = self.critic.evaluate(candidate_path)
             
-            print(f"❌ Failed (Score: {report['score']}). Preparing feedback...")
-            # Extract simple failures for the Optimizer
-            last_failure_digest = [f for f in report["failures"]][:3] # Top 3 errors
+            # Save Report
+            report_path = os.path.join(iter_dir, "report.json")
+            with open(report_path, 'w') as f: json.dump(report, f, indent=2)
 
-        print("\nRun Complete.")
+            # ------------------------------------------------------------------
+            # STEP 4: EVALUATE COST
+            # ------------------------------------------------------------------
+            score = report.get("score", 0.0)
+            cost = 1.0 - score
+            
+            print(f"   📊 Score: {score:.2f} | Cost: {cost:.2f}")
+            
+            if report.get("pass"):
+                print(f"✅ SUCCESS! Behavioral Equivalence Achieved in {i} iterations.")
+                print(f"   Artifacts: {iter_dir}")
+                return True
+            else:
+                print(f"   ❌ Failures: {len(report.get('failures', []))}")
+                for fail in report.get("failures", [])[:3]: # Show top 3
+                    print(f"      - {fail}")
 
-    def _save_artifact(self, folder, filename, content):
-        """Helper to save string content to a file."""
-        with open(os.path.join(folder, filename), 'w') as f:
-            f.write(content)
+        print("\n⏹️  Max iterations reached. Optimization failed.")
+        return False

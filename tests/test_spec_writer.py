@@ -1,29 +1,51 @@
-import unittest
-from unittest.mock import MagicMock
+# tests/test_spec_writer.py
+import pytest
+from unittest.mock import patch, MagicMock
 from core.spec_writer import SpecWriter
 
-class TestSpecWriter(unittest.TestCase):
-    def test_initial_draft_flow(self):
-        """Verify SpecWriter formats the prompt and calls the LLM."""
-        
-        # 1. Mock the LLM Client
-        mock_llm = MagicMock()
-        mock_llm.complete.return_value = "# Functional Specification\nTest Content"
-        
-        # 2. Initialize Writer with Mock
-        writer = SpecWriter(llm_client=mock_llm)
-        
-        # 3. Run
-        dummy_code = "def add(a, b): return a + b"
-        result = writer.initial_draft(dummy_code)
-        
-        # 4. Verify Output
-        self.assertEqual(result, "# Functional Specification\nTest Content")
-        
-        # 5. Verify Prompt Construction
-        # We check if the code was actually injected into the prompt
-        args, _ = mock_llm.complete.call_args
-        self.assertIn("def add(a, b):", args[1]) # user_prompt is the second arg
+@patch("core.spec_writer.LLMClient")
+def test_generate_spec_flow(mock_llm_client_cls):
+    # 1. Setup
+    # Mock the instance created by the class
+    mock_instance = mock_llm_client_cls.return_value
+    mock_instance.complete.return_value = "# Final Technical Spec"
+    
+    # Initialize SpecWriter (which will use the mocked LLMClient)
+    writer = SpecWriter()
+    
+    context = "Build a CLI tool"
+    qa_history = [{"question": "What language?", "answer": "Python"}]
+    
+    # 2. Execute
+    result = writer.generate_spec(context, qa_history)
 
-if __name__ == '__main__':
-    unittest.main()
+    # 3. Assert
+    assert result == "# Final Technical Spec"
+    
+    # Verify complete() was called
+    mock_instance.complete.assert_called_once()
+    
+    # Verify arguments passed to complete()
+    call_args = mock_instance.complete.call_args
+    # call_args[1] is kwargs, call_args[0] is args. 
+    # Since we used named args or positional, let's check safely.
+    
+    # Check if system prompt was passed
+    args, kwargs = mock_instance.complete.call_args
+    
+    # If passed as keyword args:
+    if 'user_prompt' in kwargs:
+        assert "Build a CLI tool" in kwargs['user_prompt']
+    else:
+        # If passed as positional args (system, user)
+        assert "Build a CLI tool" in args[1]
+
+def test_dependency_injection():
+    # Verify we can pass a specific client (useful for Engine tests)
+    mock_client = MagicMock()
+    mock_client.complete.return_value = "Injected"
+    
+    writer = SpecWriter(llm_client=mock_client)
+    result = writer.generate_spec("ctx", [])
+    
+    assert result == "Injected"
