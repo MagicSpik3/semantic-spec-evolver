@@ -1,6 +1,5 @@
 ### File: `README.md`
 
-```markdown
 # Semantic Spec Evolver
 **A Self-Correcting "Round-Trip" Logic Extraction Engine**
 
@@ -21,10 +20,40 @@ We prove a Natural Language Specification is "perfect" if a blind agent can use 
 
 ## 2. Architecture
 
-
-
 [Image of closed loop control system diagram]
+```mermaid
+flowchart TD
+    %% Nodes
+    Source[Legacy Code<br/>(Ground Truth)]
+    SpecWriter[Spec Writer<br/>(Generator)]
+    Spec(English Specification)
+    Builder[Blind Builder<br/>(Actor)]
+    Candidate[Candidate Code]
+    Critic{The Critic<br/>(Judge)}
+    Optimizer[Optimizer<br/>(The Fixer)]
+    Report[Failure Digest]
 
+    %% Initial Extraction
+    Source -->|Reads| SpecWriter
+    SpecWriter -->|Writes v1| Spec
+
+    %% The Build Cycle
+    Spec -->|Input| Builder
+    Builder -->|Generates| Candidate
+
+    %% The Evaluation
+    Source -.->|Behavior Check| Critic
+    Candidate -->|Behavior Check| Critic
+    
+    %% Feedback Loop
+    Critic -->|Mismatch Found| Report
+    Report -->|Feedback| Optimizer
+    Spec -.->|Context| Optimizer
+    Optimizer -->|Rewrites| Spec
+    
+    %% Styling
+    style Source fill:#f9f,stroke:#333,stroke-width:2px
+```
 
 The system operates as a closed feedback loop:
 
