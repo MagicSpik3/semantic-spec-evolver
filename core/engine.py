@@ -1,12 +1,10 @@
 import os
-import time
 import json
 from datetime import datetime
 from utils.llm_client import LLMClient
 from core.critic import Critic
 
-# We will import the agent prompts in the next step, 
-# but for now, we'll placeholder them to get the logic working.
+# Placeholder imports (we will implement these next)
 from core.spec_writer import SpecWriter
 from core.builder import Builder
 from core.optimizer import Optimizer
@@ -57,4 +55,26 @@ class EvolutionEngine:
             candidate_code = self.builder.build(current_spec)
             
             # Save code so the Critic can load it
-            code_path = os.path.join
+            code_path = os.path.join(iter_dir, "candidate.py")
+            with open(code_path, 'w') as f:
+                f.write(candidate_code)
+
+            # --- Step C: Criticize ---
+            print("🕵️  Running Critic...")
+            report = self.critic.evaluate(code_path)
+            self._save_artifact(iter_dir, "report.json", json.dumps(report, indent=2))
+
+            if report["pass"]:
+                print(f"✅ SUCCESS! Logic matched in iteration {i}.")
+                break
+            
+            print(f"❌ Failed (Score: {report['score']}). Preparing feedback...")
+            # Extract simple failures for the Optimizer
+            last_failure_digest = [f for f in report["failures"]][:3] # Top 3 errors
+
+        print("\nRun Complete.")
+
+    def _save_artifact(self, folder, filename, content):
+        """Helper to save string content to a file."""
+        with open(os.path.join(folder, filename), 'w') as f:
+            f.write(content)
