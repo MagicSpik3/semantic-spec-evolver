@@ -5,13 +5,14 @@ import shutil
 from unittest.mock import MagicMock, patch
 
 # --- 1. MOCK THE MISSING MODULES ---
-# We must do this BEFORE importing EvolutionEngine, 
-# otherwise the import will fail because the files don't exist yet.
-sys.modules['core.spec_writer'] = MagicMock()
+# REMOVE THIS LINE: sys.modules['core.spec_writer'] = MagicMock() 
+
+# Keep these because these files don't exist yet
 sys.modules['core.builder'] = MagicMock()
 sys.modules['core.optimizer'] = MagicMock()
 
 # Now we can safely import
+# (Note: EvolutionEngine imports SpecWriter, so the real file must exist now)
 from core.engine import EvolutionEngine
 
 class TestEvolutionEngine(unittest.TestCase):
@@ -26,6 +27,7 @@ class TestEvolutionEngine(unittest.TestCase):
         # Cleanup the history folder after tests
         if os.path.exists("history"):
             shutil.rmtree("history")
+            
 
     @patch('core.engine.SpecWriter')
     @patch('core.engine.Builder')
